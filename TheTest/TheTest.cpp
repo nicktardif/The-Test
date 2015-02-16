@@ -28,6 +28,9 @@ pInterfaceToRelease = nullptr;
 */
 
 IDepthFrameReader* depthFrameReader = nullptr; // depth reader
+int depthHeight	= 424;
+int depthWidth	= 512;
+int depthPixelCount = depthHeight * depthWidth;
 
 void processIncomingData() {
 	IDepthFrame *data = nullptr;
@@ -36,7 +39,6 @@ void processIncomingData() {
 	UINT16 *depthBuffer = nullptr;
 	USHORT nDepthMinReliableDistance = 0;
 	USHORT nDepthMaxReliableDistance = 0;
-	int height = 424, width = 512;
 
 	hr = depthFrameReader->AcquireLatestFrame(&data);
 	if (SUCCEEDED(hr)) hr = data->get_FrameDescription(&frameDesc);
@@ -46,19 +48,19 @@ void processIncomingData() {
 		&nDepthMaxReliableDistance);
 
 	if (SUCCEEDED(hr)) {
-		if (SUCCEEDED(frameDesc->get_Height(&height)) &&
-			SUCCEEDED(frameDesc->get_Width(&width))) {
-			depthBuffer = new UINT16[height * width];
-			hr = data->CopyFrameDataToArray(height * width, depthBuffer);
+		if (SUCCEEDED(frameDesc->get_Height(&depthHeight)) &&
+			SUCCEEDED(frameDesc->get_Width(&depthWidth))) {
+			depthBuffer = new UINT16[depthPixelCount];
+			hr = data->CopyFrameDataToArray(depthHeight * depthWidth, depthBuffer);
 			if (SUCCEEDED(hr)) {
-				cv::Mat depthMap = cv::Mat(height, width, CV_16U, depthBuffer);
-				cv::Mat img0 = cv::Mat::zeros(height, width, CV_8UC1);
+				cv::Mat depthMap = cv::Mat(depthHeight, depthWidth, CV_16U, depthBuffer);
+				cv::Mat img0 = cv::Mat::zeros(depthHeight, depthWidth, CV_8UC1);
 				cv::Mat img1;
 				double scale = 255.0 / (nDepthMaxReliableDistance -
 					nDepthMinReliableDistance);
 				depthMap.convertTo(img0, CV_8UC1, scale);
 				applyColorMap(img0, img1, cv::COLORMAP_JET);
-				cv::imshow("Depth Only", img1);
+				cv::imshow("Depth Window", img1);
 			}
 		}
 	}
@@ -95,8 +97,33 @@ int main(int argc, char** argv) {
 		depthFrameSource = nullptr;
 	}
 
+	namedWindow("Depth Window", WINDOW_AUTOSIZE);
+
+	// Initialize performance measuring variables
+	int frameCount = 0;
+	int performancePeriod = 30;
+	int startProcessingTime = INFINITY;
+	int endProcessingTime;
+	float avgProcessingTime = 0.0; 
+	float processingTimeSeconds, avgFPS;
+
 	while (depthFrameReader) {
+
+		// Print out the performance and reset the frameCount
+		if (frameCount % performancePeriod == 0) {
+			endProcessingTime = clock();
+			processingTimeSeconds = float(endProcessingTime - startProcessingTime) / CLOCKS_PER_SEC;
+			startProcessingTime = clock();
+
+			printf("Average FPS over the last %d frames: %f seconds\n", performancePeriod, float(performancePeriod / processingTimeSeconds));
+
+			frameCount = 0;
+		}
+
+		frameCount++;
+
 		processIncomingData();
+
 		int key = cv::waitKey(10);
 		if (key == 'q'){
 			break;
