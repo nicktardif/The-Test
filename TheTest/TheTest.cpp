@@ -27,12 +27,22 @@ pInterfaceToRelease = nullptr;
 }
 */
 
+IColorFrameReader* colorFrameReader = nullptr; // depth reader
+int colorHeight	= 1080;
+int colorWidth	= 1920;
+int colorPixelCount = colorHeight * colorWidth;
+
+unsigned int colorBufferSize = colorWidth * colorHeight * 4 * sizeof(unsigned char);
+const float COLOR_SCALE_DOWN_FACTOR = 0.5;
+
 IDepthFrameReader* depthFrameReader = nullptr; // depth reader
 int depthHeight	= 424;
 int depthWidth	= 512;
 int depthPixelCount = depthHeight * depthWidth;
 
+
 void processIncomingData() {
+	// Depth Stream
 	IDepthFrame *data = nullptr;
 	IFrameDescription *frameDesc = nullptr;
 	HRESULT hr = -1;
@@ -64,22 +74,47 @@ void processIncomingData() {
 			}
 		}
 	}
+
+	// Delete our buffers after they are used
 	if (depthBuffer != nullptr) {
 		delete[] depthBuffer;
 		depthBuffer = nullptr;
 	}
-
 	if (data != nullptr) {
 		data->Release();
 		data = nullptr;
+	}
+
+	// Color Stream
+	IColorFrame* pColorFrame = nullptr;
+	cv::Mat colorBufferMat(colorHeight, colorWidth, CV_8UC4);
+	cv::Mat colorMat(colorHeight * COLOR_SCALE_DOWN_FACTOR, colorWidth * COLOR_SCALE_DOWN_FACTOR, CV_8UC4);
+
+	hr = colorFrameReader->AcquireLatestFrame(&pColorFrame);
+	if (SUCCEEDED(hr)){
+
+		// Convert the raw color data and put it into BGRA format in the pixel array
+		hr = pColorFrame->CopyConvertedFrameDataToArray(colorBufferSize, reinterpret_cast<BYTE*>(colorBufferMat.data), ColorImageFormat::ColorImageFormat_Bgra);
+		if (SUCCEEDED(hr)){
+
+			// Resize the image to fit our scaled-down output
+			cv::resize(colorBufferMat, colorMat, cv::Size(), COLOR_SCALE_DOWN_FACTOR, COLOR_SCALE_DOWN_FACTOR);
+			cv::imshow("Flow Window", colorMat);
+		}
+	}
+
+	// Delete our buffers after they are used
+	if (pColorFrame != nullptr) {
+		pColorFrame->Release();
+		pColorFrame = nullptr;
 	}
 }
 
 int main(int argc, char** argv) {
 	HRESULT hr;
-	IKinectSensor* kinectSensor = nullptr;     // kinect sensor
+	IKinectSensor* kinectSensor = nullptr;     // Kinect sensor
 
-	// initialize Kinect Sensor
+	// Initialize Kinect Sensor
 	hr = GetDefaultKinectSensor(&kinectSensor);
 	if (FAILED(hr) || !kinectSensor) {
 		std::cout << "ERROR hr=" << hr << "; sensor=" << kinectSensor << std::endl;
@@ -87,17 +122,29 @@ int main(int argc, char** argv) {
 	}
 	CHECKERROR(kinectSensor->Open());
 
-	// initialize depth frame reader
+	// Initialize depth frame reader
 	IDepthFrameSource* depthFrameSource = nullptr;
 	CHECKERROR(kinectSensor->get_DepthFrameSource(&depthFrameSource));
 	CHECKERROR(depthFrameSource->OpenReader(&depthFrameReader));
 
+	// Initialize color frame reader
+	IColorFrameSource* colorFrameSource = nullptr;
+	CHECKERROR(kinectSensor->get_ColorFrameSource(&colorFrameSource));
+	CHECKERROR(colorFrameSource->OpenReader(&colorFrameReader));
+
+	// Free the depth and color sources after we get the readers
 	if (depthFrameSource != nullptr) {
 		depthFrameSource->Release();
 		depthFrameSource = nullptr;
 	}
+	if (colorFrameSource != nullptr) {
+		colorFrameSource->Release();
+		colorFrameSource = nullptr;
+	}
 
+	// Create our OpenCV windows
 	namedWindow("Depth Window", WINDOW_AUTOSIZE);
+	namedWindow("Flow Window", WINDOW_AUTOSIZE);
 
 	// Initialize performance measuring variables
 	int frameCount = 0;
@@ -107,7 +154,7 @@ int main(int argc, char** argv) {
 	float avgProcessingTime = 0.0; 
 	float processingTimeSeconds, avgFPS;
 
-	while (depthFrameReader) {
+	while (depthFrameReader || colorFrameReader) {
 
 		// Print out the performance and reset the frameCount
 		if (frameCount % performancePeriod == 0) {
